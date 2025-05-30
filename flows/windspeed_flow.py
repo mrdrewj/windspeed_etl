@@ -48,7 +48,6 @@ def transform_data(raw_data):
 		freq = pd.Timedelta(seconds = minutely_15.Interval()),
 		inclusive = "left"
 	)}
-	# print(minutely_15_data)
 
 	# Convert to timezone-adjusted time by applying the offset
 	offset = pd.Timedelta(seconds=timezone_offset)
