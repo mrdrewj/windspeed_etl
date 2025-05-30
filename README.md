@@ -39,10 +39,8 @@ prefect agent start
 2. Register and run the flow:
 
 ```
-python flows/your_flow_script.py
+python flows/windspeed_flow.py
 ```
-
-Replace `your_flow_script.py` with the actual script in the `flows` directory.
 
 ## Project Structure
 
