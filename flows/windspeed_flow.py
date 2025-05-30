@@ -20,13 +20,14 @@ def get_windspeeds():
 		"longitude": -119.810905,
 		"minutely_15": ["wind_speed_10m", "wind_direction_10m", "wind_gusts_10m"],
 		"timezone": "America/Los_Angeles",
+		"forecast_days": 1,
 		"wind_speed_unit": "mph",
 		"temperature_unit": "fahrenheit",
 		"precipitation_unit": "inch",
+		"forecast_hours": 1,
 		"forecast_minutely_15": 4
 	}
 	responses = openmeteo.weather_api(url, params=params)
-
 	return responses[0]
 
 @task
@@ -49,10 +50,11 @@ def transform_data(raw_data):
 		inclusive = "left"
 	)}
 
+
 	# Convert to timezone-adjusted time by applying the offset
 	offset = pd.Timedelta(seconds=timezone_offset)
 	minutely_15_data["date"] = minutely_15_data["date"] + offset
-
+	print(minutely_15_data)
 	minutely_15_data["wind_speed_10m"] = minutely_15_wind_speed_10m
 	minutely_15_data["wind_gusts_10m"] = minutely_15_wind_gusts_10m
 	minutely_15_data["wind_direction_10m"] = minutely_15_wind_direction_10m
@@ -64,13 +66,25 @@ def transform_data(raw_data):
 def save_to_sqlite(df):
 	conn = sqlite3.connect("data/windspeed.db")
 	try:
-		existing = pd.read_sql_query("SELECT date FROM windspeed", conn)
+		# Read existing dates from the database
+		existing = pd.read_sql_query("SELECT date FROM windspeed", conn, parse_dates=["date"])
+
+		# Ensure both DataFrames have timezone-aware datetime objects in UTC
+		existing["date"] = existing["date"].dt.tz_localize("UTC")
+		df["date"] = df["date"].dt.tz_localize("UTC")
+
+		# Filter out records that already exist
 		df = df[~df["date"].isin(existing["date"])]
-	except Exception:
+	except Exception as e:
+		print(f"Error reading existing data: {e}")
 		# Table might not exist yet
 		pass
-	df.to_sql("windspeed", conn, if_exists="append", index=False)
+
+	print(f"Number of new records to insert: {len(df)}")
+	if not df.empty:
+		df.to_sql("windspeed", conn, if_exists="append", index=False)
 	conn.close()
+
 
 @task
 def export_sqlite_to_csv():
