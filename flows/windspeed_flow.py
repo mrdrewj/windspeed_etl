@@ -1,3 +1,5 @@
+import os
+
 import openmeteo_requests
 from prefect import flow, task
 import pandas as pd
@@ -54,7 +56,13 @@ def transform_data(raw_data):
 	# Convert to timezone-adjusted time by applying the offset
 	offset = pd.Timedelta(seconds=timezone_offset)
 	minutely_15_data["date"] = minutely_15_data["date"] + offset
-	print(minutely_15_data)
+
+	# MAKE IT SQLITE-READY HERE:
+	# 1. Drop timezone (force naive)
+	minutely_15_data["date"] = minutely_15_data["date"].tz_localize(None)
+	# 2. Format as string
+	minutely_15_data["date"] = minutely_15_data["date"].strftime('%Y-%m-%d %H:%M:%S')
+
 	minutely_15_data["wind_speed_10m"] = minutely_15_wind_speed_10m
 	minutely_15_data["wind_gusts_10m"] = minutely_15_wind_gusts_10m
 	minutely_15_data["wind_direction_10m"] = minutely_15_wind_direction_10m
@@ -62,29 +70,41 @@ def transform_data(raw_data):
 	minutely_15_dataframe = pd.DataFrame(data = minutely_15_data)
 	return minutely_15_dataframe
 
+def create_table_if_not_exists(conn):
+    create_table_query = """
+    CREATE TABLE IF NOT EXISTS windspeed (
+        date TIMESTAMP PRIMARY KEY,
+        wind_speed_10m REAL,
+        wind_gusts_10m REAL,
+        wind_direction_10m REAL
+    );
+    """
+    conn.execute(create_table_query)
+    conn.commit()
+
+def upsert_windspeed_data(conn, df):
+
+    insert_query = """
+    INSERT INTO windspeed (date, wind_speed_10m, wind_gusts_10m, wind_direction_10m)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(date) DO UPDATE SET
+        wind_speed_10m=excluded.wind_speed_10m,
+        wind_gusts_10m=excluded.wind_gusts_10m,
+        wind_direction_10m=excluded.wind_direction_10m;
+    """
+    data = df[["date", "wind_speed_10m", "wind_gusts_10m", "wind_direction_10m"]].values.tolist()
+    conn.executemany(insert_query, data)
+    conn.commit()
+
+
 @task
 def save_to_sqlite(df):
-	conn = sqlite3.connect("data/windspeed.db")
-	try:
-		# Read existing dates from the database
-		existing = pd.read_sql_query("SELECT date FROM windspeed", conn, parse_dates=["date"])
+    os.makedirs("data", exist_ok=True)
 
-		# Ensure both DataFrames have timezone-aware datetime objects in UTC
-		existing["date"] = existing["date"].dt.tz_localize("UTC")
-		df["date"] = df["date"].dt.tz_localize("UTC")
-
-		# Filter out records that already exist
-		df = df[~df["date"].isin(existing["date"])]
-	except Exception as e:
-		print(f"Error reading existing data: {e}")
-		# Table might not exist yet
-		pass
-
-	print(f"Number of new records to insert: {len(df)}")
-	if not df.empty:
-		df.to_sql("windspeed", conn, if_exists="append", index=False)
-	conn.close()
-
+    conn = sqlite3.connect("data/windspeed.db")
+    create_table_if_not_exists(conn)
+    upsert_windspeed_data(conn, df)
+    conn.close()
 
 @task
 def export_sqlite_to_csv():
